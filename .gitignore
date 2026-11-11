@@ -1,0 +1,13 @@
+.DS_Store
+**/.DS_Store
+**/.idea/
+**/*.iml
+**/.gradle/
+**/build/
+**/out/
+**/target/
+**/node_modules/
+**/dist/
+**/.env.local
+**/.env.*.local
+**/application-local.properties
