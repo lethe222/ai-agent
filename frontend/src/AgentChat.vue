@@ -25,16 +25,18 @@
           <div v-if="message.role === 'assistant'" class="assistant-name">
             <span class="mark mini" aria-hidden="true">✦</span>灵感智能体
           </div>
-          <Transition name="phase">
-            <div v-if="message.status" class="status" role="status">
-              <span class="pulse" aria-hidden="true"></span>{{ message.status }}
-            </div>
-          </Transition>
           <template v-if="message.text">
             <div v-if="message.role === 'assistant'" class="message-text markdown-body" v-html="renderMarkdown(message)"></div>
             <p v-else class="message-text">{{ message.text }}</p>
             <span v-if="loading && message.id === activeReplyId" class="cursor" aria-hidden="true"></span>
           </template>
+          <Transition name="phase">
+            <div v-if="message.status" class="status" :class="{ 'status-after-text': message.text }" role="status">
+              <span class="status-spinner" aria-hidden="true"></span>
+              <span>{{ message.status }}</span>
+              <span class="status-time" aria-hidden="true">{{ message.elapsed }} 秒</span>
+            </div>
+          </Transition>
           <p v-if="message.note" class="note" :role="message.error ? 'alert' : 'status'">{{ message.note }}</p>
         </article>
       </div>
@@ -230,13 +232,23 @@ async function sendStream() {
 
   inputMsg.value = ''
   messages.value.push({ id: ++nextId, role: 'user', text: question })
-  messages.value.push({ id: ++nextId, role: 'assistant', text: '', status: '智能体正在思考…', note: '', error: false })
+  messages.value.push({ id: ++nextId, role: 'assistant', text: '', status: '正在思考，请稍候', elapsed: 0, note: '', error: false })
   const reply = messages.value.at(-1)
-  const run = { controller: new AbortController(), frame: null, pending: '' }
+  const run = { controller: new AbortController(), frame: null, pending: '', timer: null, startedAt: Date.now(), lastActivity: Date.now(), serverStatus: '' }
   current = run
   activeReplyId.value = reply.id
   loading.value = true
   scrollToLatest(true)
+
+  // 只展示连接和等待状态，不猜测模型内部是否正在调用工具。
+  run.timer = setInterval(() => {
+    if (current !== run) return
+    const now = Date.now()
+    reply.elapsed = Math.floor((now - run.startedAt) / 1000)
+    if (!run.serverStatus && now - run.lastActivity >= 4000) {
+      reply.status = reply.text || run.pending ? '正在等待后续内容…' : '正在等待回复…'
+    }
+  }, 1000)
 
   function flush() {
     if (run.frame !== null) cancelAnimationFrame(run.frame)
@@ -249,15 +261,20 @@ async function sendStream() {
 
   function onText(text) {
     if (current !== run || run.controller.signal.aborted || !text) return
-    reply.status = ''
+    run.lastActivity = Date.now()
+    run.serverStatus = ''
+    reply.status = '正在生成回答…'
     run.pending += text
     // 显式按浏览器帧合并文本，避免每个网络片段都触发一次渲染。
     if (run.frame === null) run.frame = requestAnimationFrame(flush)
   }
 
   function onStatus(status) {
-    if (current === run && !run.controller.signal.aborted && !reply.text && !run.pending) {
-      reply.status = status
+    if (current === run && !run.controller.signal.aborted) {
+      run.lastActivity = Date.now()
+      run.serverStatus = status
+      reply.status = status || (reply.text || run.pending ? '正在生成回答…' : '正在思考，请稍候')
+      scrollToLatest()
     }
   }
 
@@ -271,6 +288,7 @@ async function sendStream() {
     }
   } finally {
     // 新对话会使旧请求失效，旧请求的收尾不能改动新对话。
+    clearInterval(run.timer)
     if (current === run) {
       flush()
       if (run.controller.signal.aborted) reply.note = '已停止生成'
@@ -290,6 +308,7 @@ function stopStream() {
 function resetChat() {
   if (current) {
     if (current.frame !== null) cancelAnimationFrame(current.frame)
+    clearInterval(current.timer)
     current.controller.abort()
     current = null
   }
@@ -304,6 +323,7 @@ function resetChat() {
 
 onBeforeUnmount(() => {
   if (current?.frame != null) cancelAnimationFrame(current.frame)
+  if (current?.timer != null) clearInterval(current.timer)
   current?.controller.abort()
   current = null
 })
@@ -386,6 +406,10 @@ h1 { margin: 0; font-size: clamp(27px, 5vw, 46px); letter-spacing: -.04em; }
 .markdown-body th, .markdown-body td { border: 1px solid #e3dfeb; padding: 6px 10px; }
 .markdown-body th { background: #f2eef9; }
 .status { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; background: #eee8fb; color: #55349f; font-size: 14px; overflow-wrap: anywhere; }
+.status-after-text { margin-top: 12px; }
+.status-time { color: #776b8a; font-size: 12px; font-variant-numeric: tabular-nums; }
+.status-spinner { width: 14px; height: 14px; flex-shrink: 0; border: 2px solid #cdbdee; border-top-color: #6844c6; border-radius: 50%; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .phase-enter-active, .phase-leave-active { transition: opacity .2s, transform .2s; }
 .phase-enter-from, .phase-leave-to { opacity: 0; transform: translateY(4px); }
 .pulse, .mode i { width: 7px; height: 7px; border-radius: 50%; background: #754fdb; flex-shrink: 0; }
