@@ -104,6 +104,14 @@ let nextId = 0
 let current = null
 let follow = true
 
+// 页面打开时创建一个会话 ID；同一对话内的每条消息都复用它。
+function createChatId() {
+  const bytes = new Uint8Array(16)
+  window.crypto.getRandomValues(bytes)
+  return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+}
+let chatId = createChatId()
+
 function useSuggestion(text) {
   inputMsg.value = text
   inputField.value?.focus()
@@ -164,9 +172,11 @@ async function mockStream(question, signal, onStatus, onText) {
   }
 }
 
-async function fetchStream(question, signal, onStatus, onText) {
+async function fetchStream(question, signal, onStatus, onText, conversationId) {
   const url = new URL(endpoint, window.location.href)
   url.searchParams.set('message', question)
+  // 将当前会话 ID 传给后端，让同一对话复用自己的记忆。
+  url.searchParams.set('chatId', conversationId)
   const response = await fetch(url, { headers: { Accept: 'text/event-stream' }, signal })
   if (!response.ok) throw new Error('接口返回 HTTP ' + response.status)
   const contentType = response.headers.get('content-type') || ''
@@ -279,7 +289,7 @@ async function sendStream() {
   }
 
   try {
-    await (useMock ? mockStream : fetchStream)(question, run.controller.signal, onStatus, onText)
+    await (useMock ? mockStream : fetchStream)(question, run.controller.signal, onStatus, onText, chatId)
     if (!run.controller.signal.aborted && !reply.text && !run.pending) throw new Error('未收到回复正文')
   } catch (error) {
     if (current === run && !run.controller.signal.aborted) {
@@ -312,6 +322,8 @@ function resetChat() {
     current.controller.abort()
     current = null
   }
+  // 新对话使用新的 ID，避免继续读取上一段对话的记忆。
+  chatId = createChatId()
   messages.value = []
   renderedMessages.clear()
   inputMsg.value = ''
